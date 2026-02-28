@@ -1,0 +1,8 @@
+{
+  "name": "Project Ghostwriter",
+  "description": "AI-Driven Blind Accessibility Engine using Gemini for spatial reasoning and ElevenLabs for audio guidance.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
