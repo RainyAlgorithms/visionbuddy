@@ -15,8 +15,8 @@ export class SnowflakeService {
   async searchRegistry(query: string, buildingId: string): Promise<SpatialNode[]> {
     const sql = `SELECT ID, BUILDING_ID, COORDINATES, DESCRIPTION, IS_GOLDEN_PATH 
                  FROM SPATIAL_REGISTRY 
-                 WHERE BUILDING_ID = '${buildingId}' 
-                 AND (LOWER(DESCRIPTION) LIKE '%${query.toLowerCase()}%')`;
+                 WHERE BUILDING_ID = '${buildingId.replace(/'/g, "''")}' 
+                 AND (LOWER(DESCRIPTION) LIKE '%${query.toLowerCase().replace(/'/g, "''")}%')`;
     
     try {
       const response = await fetch("/api/snowflake/execute", {
@@ -26,7 +26,7 @@ export class SnowflakeService {
       });
       
       const data = await response.json();
-      if (data.data) {
+      if (response.ok && data.data) {
         return data.data.map((row: any[]) => ({
           id: row[0],
           buildingId: row[1],
@@ -35,6 +35,18 @@ export class SnowflakeService {
           isGoldenPath: row[4] === "TRUE" || row[4] === true
         }));
       }
+      
+      // If table doesn't exist, Snowflake returns a 400 with a specific message
+      const lowerMsg = (data.message || "").toLowerCase();
+      if (lowerMsg.includes("does not exist") || lowerMsg.includes("not found")) {
+        console.warn("Snowflake table SPATIAL_REGISTRY does not exist yet (Search). This is normal for a new setup.");
+        return [];
+      }
+
+      if (!response.ok) {
+        throw new Error(data.message || data.error || `Snowflake Error ${response.status}`);
+      }
+
       return [];
     } catch (error) {
       console.error("Snowflake Search Error:", error);
@@ -45,7 +57,7 @@ export class SnowflakeService {
   async fetchGoldenPath(buildingId: string): Promise<SpatialNode[]> {
     const sql = `SELECT ID, BUILDING_ID, COORDINATES, DESCRIPTION, IS_GOLDEN_PATH 
                  FROM SPATIAL_REGISTRY 
-                 WHERE BUILDING_ID = '${buildingId}' AND IS_GOLDEN_PATH = TRUE`;
+                 WHERE BUILDING_ID = '${buildingId.replace(/'/g, "''")}' AND IS_GOLDEN_PATH = TRUE`;
     
     try {
       const response = await fetch("/api/snowflake/execute", {
@@ -57,7 +69,7 @@ export class SnowflakeService {
       const data = await response.json();
       
       // Map Snowflake response format to SpatialNode[]
-      if (data.data) {
+      if (response.ok && data.data) {
         return data.data.map((row: any[]) => ({
           id: row[0],
           buildingId: row[1],
@@ -66,6 +78,18 @@ export class SnowflakeService {
           isGoldenPath: row[4] === "TRUE" || row[4] === true
         }));
       }
+
+      // If table doesn't exist, Snowflake returns a 400 with a specific message
+      const lowerMsg = (data.message || "").toLowerCase();
+      if (lowerMsg.includes("does not exist") || lowerMsg.includes("not found")) {
+        console.warn("Snowflake table SPATIAL_REGISTRY does not exist yet (Fetch). This is normal for a new setup.");
+        return [];
+      }
+
+      if (!response.ok) {
+        throw new Error(data.message || data.error || `Snowflake Error ${response.status}`);
+      }
+
       return [];
     } catch (error) {
       console.error("Snowflake Fetch Error:", error);

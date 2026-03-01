@@ -32,9 +32,9 @@ async function startServer() {
 
     // Detect token type: JWTs usually start with 'ey'
     const isJwt = token.startsWith("ey");
-    // If it's not a JWT, we'll try OAUTH, but we'll allow the header to be omitted 
-    // if the token doesn't look like either to avoid the "invalid header" error.
-    const tokenType = isJwt ? "JWT" : (token.length > 50 ? "OAUTH" : null);
+    // Only send the header if it's a JWT. For other tokens, Snowflake can usually infer it.
+    // If it's an OAuth token and fails, the user may need to explicitly set this.
+    const tokenType = isJwt ? "JWT" : null;
     
     const snowflakeUrl = `https://${account}.snowflakecomputing.com/api/v2/statements`;
     console.log(`Executing Snowflake SQL on: ${snowflakeUrl} using ${tokenType}`);
@@ -50,55 +50,59 @@ async function startServer() {
       "Accept": "application/json",
     };
 
-    // Only add the token type header if we are reasonably sure, 
-    // or allow it to be omitted as Snowflake can often infer it.
-    // Some "Programmatic tokens" might not like this header if they are session-based.
-    if (tokenType) {
-      headers["X-Snowflake-Authorization-Token-Type"] = tokenType;
-    }
+    const body: any = {
+      statement: sql,
+      timeout: 60
+    };
+
+    if (database) body.database = database;
+    if (schema) body.schema = schema;
+    if (warehouse) body.warehouse = warehouse;
+    if (role) body.role = role;
 
     try {
       const response = await fetch(snowflakeUrl, {
         method: "POST",
         headers,
-        body: JSON.stringify({
-          statement: sql,
-          timeout: 60,
-          database,
-          schema,
-          warehouse,
-          role
-        })
+        body: JSON.stringify(body)
       });
 
       const contentType = response.headers.get("content-type");
       if (contentType && contentType.includes("application/json")) {
         const data = await response.json();
         console.log("Snowflake Response Status:", response.status);
-        res.json(data);
+        if (response.status >= 400) {
+          console.error("Snowflake API Error Detail:", JSON.stringify(data, null, 2));
+          // Extract the actual message from Snowflake if available
+          const errorMsg = data.message || data.error || "Snowflake API Error";
+          let hint = response.status === 400 ? "\n\nHint: This often means the SQL is invalid or the table doesn't exist yet. If you haven't pinned any locations, this is normal." : "";
+          
+          if (errorMsg.includes("warehouse")) {
+            hint = "\n\nHint: Your Snowflake request failed because no warehouse was specified or the specified warehouse is invalid. Please check your SNOWFLAKE_WAREHOUSE environment variable.";
+          } else if (errorMsg.includes("database") || errorMsg.includes("schema")) {
+            hint = "\n\nHint: Your Snowflake request failed because the database or schema was not found. Please check your SNOWFLAKE_DATABASE and SNOWFLAKE_SCHEMA environment variables.";
+          } else if (errorMsg.includes("X-Snowflake-Authorization-Token-Type")) {
+            hint = "\n\nHint: Snowflake rejected the authorization header type. This can happen with some OAuth providers. The app will try to adapt, but you may need to check your token type.";
+          }
+
+          return res.status(response.status).json({ 
+            ...data,
+            error: errorMsg,
+            hint: hint + (data.hint || "")
+          });
+        }
+        res.status(response.status).json(data);
       } else {
         const text = await response.text();
-        console.error(`Snowflake Error (${response.status}):`, text.substring(0, 1000));
+        console.error(`Snowflake Non-JSON Error (${response.status}):`, text.substring(0, 1000));
         
-        let hint = "Check your SNOWFLAKE_ACCOUNT and SNOWFLAKE_TOKEN.";
+        let hint = "Snowflake returned a non-JSON response. Check your SNOWFLAKE_ACCOUNT and SNOWFLAKE_TOKEN.";
         if (response.status === 401) {
-          hint = `Authentication failed (401). Your SNOWFLAKE_TOKEN is invalid or expired.
-          
-          HOW TO FIX:
-          1. If you are using an OAuth token, ensure it hasn't expired.
-          2. If you are trying to use your Snowflake password, STOP. The SQL API requires an OAuth Token or Key-Pair authentication.
-          3. For a quick test, you can generate a temporary token using the Snowflake CLI (snowsql): 'snowsql -a your_account -u your_user --generate-jwt' (if configured).
-          4. Alternatively, ensure your Service Account has the correct 'ACCOUNTADMIN' role assigned in the request.`;
-        }
-        if (response.status === 404) {
-          const testUrl = `https://${account}.snowflakecomputing.com/console/login`;
-          hint = `Snowflake returned a 404 (Not Found). This means the URL "https://${account}.snowflakecomputing.com" does not exist. 
-          
-          HOW TO FIX:
-          1. Try opening this URL in your browser: ${testUrl}
-          2. If it doesn't load a login page, your SNOWFLAKE_ACCOUNT identifier is wrong.
-          3. To find the correct one: Log in to Snowflake, click your name (bottom-left) -> Account -> Copy the identifier (e.g., "MYORG-MYACCOUNT").
-          4. If you are using a locator like "UF75979", you MUST add the region (e.g., "UF75979.us-east-1").`;
+          hint = "Authentication failed (401). Your SNOWFLAKE_TOKEN is invalid or expired.";
+        } else if (response.status === 403) {
+          hint = "Forbidden (403). Your token might not have permission to use the SQL API, or your IP might be blocked by Snowflake Network Policies.";
+        } else if (response.status === 404) {
+          hint = `Snowflake returned a 404. The account identifier "${account}" might be incorrect.`;
         }
         if (text.includes("ErrorContainer")) hint = "Snowflake returned a branded error page. This usually means the URL is valid but the request was rejected (e.g., IP blocking or invalid credentials).";
 

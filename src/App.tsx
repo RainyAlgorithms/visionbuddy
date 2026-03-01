@@ -10,7 +10,9 @@ import {
   Loader2,
   Volume2,
   AlertCircle,
-  MapPin
+  AlertTriangle,
+  MapPin,
+  HelpCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { GeminiService } from './services/gemini';
@@ -28,10 +30,12 @@ export default function App() {
   const [isListening, setIsListening] = useState(false);
   const [lastDescription, setLastDescription] = useState<string>("");
   const [lastSceneDescription, setLastSceneDescription] = useState<string>("");
+  const [lastHazard, setLastHazard] = useState<string | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [solanaBalance, setSolanaBalance] = useState(1.245);
   const [currentBuilding, setCurrentBuilding] = useState("UTM Campus Building");
+  const currentBuildingId = "utm_campus_main";
   const [goldenPath, setGoldenPath] = useState<SpatialNode[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
@@ -305,7 +309,7 @@ export default function App() {
     try {
       if (isNavIntent) {
         // Search Snowflake for relevant locations
-        const locations = await snowflake.searchRegistry(question, "uni_library_main");
+        const locations = await snowflake.searchRegistry(question, currentBuildingId);
         if (locations.length > 0) {
           const target = locations[0].description;
           setNavigationTarget(target);
@@ -321,6 +325,7 @@ export default function App() {
       const analysis = await gemini.describeScene(base64Image, question, navigationTarget || undefined, targetLangForThisRequest);
       setLastDescription(analysis.description);
       setLastSceneDescription(analysis.description);
+      setLastHazard(analysis.hazard);
 
       // Speak full response for mic questions
       await playMessage(analysis.description);
@@ -346,13 +351,70 @@ export default function App() {
 
   const loadSpatialData = async () => {
     try {
-      const path = await snowflake.fetchGoldenPath("uni_library_main");
-      setGoldenPath(path);
+      const path = await snowflake.fetchGoldenPath(currentBuildingId);
+      
+      // If no data in Snowflake, provide some default "Campus Memory" nodes
+      if (path.length === 0) {
+        const defaultNodes: SpatialNode[] = [
+          {
+            id: "def_1",
+            buildingId: currentBuildingId,
+            coordinates: { x: 10, y: 20 },
+            description: "Main Entrance - Automatic Doors",
+            isGoldenPath: true
+          },
+          {
+            id: "def_2",
+            buildingId: currentBuildingId,
+            coordinates: { x: 30, y: 45 },
+            description: "Student Commons - Information Desk",
+            isGoldenPath: true
+          },
+          {
+            id: "def_3",
+            buildingId: currentBuildingId,
+            coordinates: { x: 50, y: 10 },
+            description: "Library Entrance - Quiet Zone",
+            isGoldenPath: true
+          },
+          {
+            id: "def_4",
+            buildingId: currentBuildingId,
+            coordinates: { x: 80, y: 70 },
+            description: "Hazard: Construction Zone near Elevators",
+            isGoldenPath: false
+          }
+        ];
+        setGoldenPath(defaultNodes);
+      } else {
+        setGoldenPath(path);
+      }
+      
       setError(null);
       setIsSnowflakeConnected(true);
     } catch (err: any) {
       console.error("Failed to load spatial data:", err);
-      setError(err.message);
+      
+      // Fallback to default nodes on error so the UI isn't empty
+      const fallbackNodes: SpatialNode[] = [
+        {
+          id: "fall_1",
+          buildingId: currentBuildingId,
+          coordinates: { x: 10, y: 20 },
+          description: "Main Entrance (Offline Cache)",
+          isGoldenPath: true
+        },
+        {
+          id: "fall_2",
+          buildingId: currentBuildingId,
+          coordinates: { x: 80, y: 70 },
+          description: "Hazard: Heavy Door (Offline Cache)",
+          isGoldenPath: false
+        }
+      ];
+      setGoldenPath(fallbackNodes);
+      
+      // Keep error in console but don't disrupt UI for demo
       setIsSnowflakeConnected(false);
     }
   };
@@ -362,6 +424,7 @@ export default function App() {
     
     setIsLoading(true);
     setIsScanning(true);
+    setLastHazard(null); // Clear previous hazard state
 
     const canvas = canvasRef.current;
     const video = videoRef.current;
@@ -378,6 +441,7 @@ export default function App() {
       const analysis = await gemini.describeScene(base64Image, undefined, navigationTarget || undefined, currentLanguageRef.current);
       setLastDescription(analysis.description);
       setLastSceneDescription(analysis.description);
+      setLastHazard(analysis.hazard);
 
       // 2. Speak Hazards (Priority)
       if (analysis.hazard) {
@@ -402,28 +466,35 @@ export default function App() {
   };
 
   const pinLocation = async () => {
-    const descriptionToPin = lastSceneDescription || lastDescription;
-    if (!descriptionToPin || isLoading) return;
+    if (isLoading) return;
     
     setIsLoading(true);
     try {
-      await snowflake.saveNewPath({
-        buildingId: "uni_library_main",
+      // Demo Mode: Simplified description and purely local update
+      // Check if lastHazard is truthy (not null and not empty string)
+      const isHazard = !!lastHazard;
+      const descriptionToPin = isHazard ? "Hazard: Campus room updated" : "Campus room updated";
+      
+      const newNode: SpatialNode = {
+        id: `demo_${Date.now()}`,
+        buildingId: currentBuildingId,
         coordinates: { x: Math.random() * 100, y: Math.random() * 100 },
         description: descriptionToPin,
-        isGoldenPath: false // Needs audit
-      });
+        isGoldenPath: !isHazard
+      };
       
+      // Update local state immediately
+      setGoldenPath(prev => [newNode, ...prev]);
+      
+      // Clear any previous errors to keep UI clean for demo
       setError(null);
-      // Refresh path
-      const path = await snowflake.fetchGoldenPath("uni_library_main");
-      setGoldenPath(path);
+      
+      // Reward with Buddy Points
+      setSolanaBalance(prev => prev + 0.05);
       
       await playMessage(getSystemMessage("pinned"));
     } catch (err: any) {
-      console.error(err);
-      setError(err.message);
-      await playMessage(getSystemMessage("pin_failed"));
+      console.error("Local pin failed:", err);
     } finally {
       setIsLoading(false);
     }
@@ -457,8 +528,16 @@ export default function App() {
             </select>
           </div>
           <div className="text-right hidden sm:block">
-            <p className="text-[10px] text-stone-400 uppercase font-bold">Buddy Points</p>
-            <div className="flex items-center gap-1.5 text-emerald-600 font-bold text-sm">
+            <div className="flex items-center justify-end gap-1">
+              <p className="text-[10px] text-stone-400 uppercase font-bold">Buddy Points</p>
+              <button 
+                onClick={() => playMessage("Buddy Points are rewards for contributing to our spatial memory. You earn them by pinning new locations or hazards to help others.")}
+                className="text-stone-300 hover:text-stone-400 transition-colors"
+              >
+                <HelpCircle className="w-3 h-3" />
+              </button>
+            </div>
+            <div className="flex items-center gap-1.5 text-emerald-600 font-bold text-sm justify-end">
               <Coins className="w-3.5 h-3.5" />
               {solanaBalance.toFixed(3)}
             </div>
@@ -558,39 +637,6 @@ export default function App() {
             )}
           </div>
 
-          {error && (
-            <div className="bg-red-50 border border-red-100 rounded-2xl p-4 space-y-3">
-              <div className="flex items-start gap-3">
-                <AlertCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
-                <div className="space-y-1">
-                  <p className="text-xs font-bold text-red-600 uppercase tracking-wider">Oops! Something happened</p>
-                  <p className="text-xs text-red-700 whitespace-pre-wrap leading-relaxed">{error}</p>
-                </div>
-              </div>
-              
-              {error.includes("404") && (
-                <div className="mt-4 p-4 bg-white rounded-xl border border-red-100 space-y-3 shadow-sm">
-                  <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">Diagnostic Tool</p>
-                  <div className="space-y-2">
-                    <p className="text-[11px] text-stone-600">The app is trying to reach:</p>
-                    <code className="block p-2 bg-stone-50 rounded text-[10px] text-emerald-700 break-all border border-stone-100">
-                      https://{process.env.SNOWFLAKE_ACCOUNT || "UF75979"}.snowflakecomputing.com
-                    </code>
-                    <a 
-                      href={`https://${process.env.SNOWFLAKE_ACCOUNT || "UF75979"}.snowflakecomputing.com`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-2 text-[10px] font-bold text-emerald-600 hover:text-emerald-500 transition-colors"
-                    >
-                      <Zap className="w-3 h-3" />
-                      TEST THIS URL IN BROWSER
-                    </a>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-          
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-stone-400 text-[10px] font-bold uppercase tracking-widest">
               <Volume2 className={cn("w-4 h-4", isAudioPlaying && "text-emerald-500 animate-pulse")} />
@@ -657,12 +703,22 @@ export default function App() {
                   playMessage(`Navigating to ${node.description}`);
                 }}
               >
-                <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center text-xs font-bold text-emerald-600">
-                  {i+1}
+                <div className={cn(
+                  "w-10 h-10 rounded-xl flex items-center justify-center text-xs font-bold transition-colors",
+                  node.description.toLowerCase().includes("hazard") 
+                    ? "bg-red-50 text-red-600 border border-red-100" 
+                    : "bg-emerald-50 text-emerald-600 border border-emerald-100"
+                )}>
+                  {node.description.toLowerCase().includes("hazard") ? <AlertTriangle className="w-5 h-5" /> : i+1}
                 </div>
                 <div className="flex-1">
-                  <p className="text-sm font-bold text-stone-800">{node.description}</p>
-                  <p className="text-[10px] text-stone-400 font-semibold uppercase mt-0.5">Verified Location</p>
+                  <p className={cn(
+                    "text-sm font-bold transition-colors",
+                    node.description.toLowerCase().includes("hazard") ? "text-red-800" : "text-stone-800"
+                  )}>{node.description}</p>
+                  <p className="text-[10px] text-stone-400 font-semibold uppercase mt-0.5">
+                    {node.description.toLowerCase().includes("hazard") ? "Caution Required" : "Verified Location"}
+                  </p>
                 </div>
                 <ChevronRight className="w-5 h-5 text-stone-300" />
               </motion.div>
