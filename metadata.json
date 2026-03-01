@@ -1,6 +1,6 @@
 {
-  "name": "Project Ghostwriter",
-  "description": "AI-Driven Blind Accessibility Engine using Gemini for spatial reasoning and ElevenLabs for audio guidance.",
+  "name": "Vision Buddy",
+  "description": "A friendly AI companion for visually impaired navigation, using Gemini for spatial reasoning and Snowflake for spatial memory.",
   "requestFramePermissions": [
     "camera",
     "microphone"
